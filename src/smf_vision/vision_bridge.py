@@ -149,7 +149,8 @@ def _selftest() -> None:
     print(json.dumps(describe_image(img), indent=2))
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """CLI entry point."""
     ap = argparse.ArgumentParser(description="Reliable local vision captioning")
     ap.add_argument("--image", help="path to image to describe")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, help="custom prompt")
@@ -158,8 +159,8 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     if args.selftest:
-        result = _selftest()
-        sys.exit(0)
+        _selftest()
+        return
     if not args.image:
         ap.print_help()
         sys.exit(1)
@@ -169,3 +170,7 @@ if __name__ == "__main__":
         print(result["caption"])
     else:
         print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
