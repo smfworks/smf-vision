@@ -80,6 +80,29 @@ def test_readable_image_size_cap(tmp_path):
         resolve_readable_image(p, max_bytes=10)
 
 
+def test_camera_rejects_mapped_metadata_ipv6():
+    with pytest.raises(UnsafeURLError, match="metadata"):
+        validate_camera_source("http://[::ffff:169.254.169.254]/latest/meta-data")
+    with pytest.raises(UnsafeURLError, match="metadata"):
+        validate_camera_source("http://[::ffff:a9fe:a9fe]/x")
+
+
+def test_camera_rejects_malformed_and_file_schemes():
+    for source in ("file:/etc/passwd", "file:etc/passwd", "//169.254.169.254/x", "http:/169.254.169.254/x"):
+        with pytest.raises(UnsafeURLError):
+            validate_camera_source(source)
+
+
+def test_rtsp_rejects_metadata():
+    with pytest.raises(UnsafeURLError, match="metadata"):
+        validate_camera_source("rtsp://169.254.169.254/stream")
+
+
+def test_webhook_rejects_cgnat():
+    with pytest.raises(UnsafeURLError, match="non-public"):
+        validate_webhook_url("https://100.100.100.200/hook")
+
+
 def test_redirect_to_metadata_is_rejected():
     handler = ValidatingRedirectHandler(role="webhook", allow_private=False, require_https=False)
     with pytest.raises(UnsafeURLError, match="metadata"):

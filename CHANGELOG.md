@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - HTTP camera, webhook, and VLM posts now re-validate every redirect hop (metadata/private SSRF)
+- IPv4-mapped IMDS (`::ffff:169.254.169.254`) rejected even when private cameras are allowed
+- `file:`, protocol-relative, and `http:/` camera sources rejected
+- RTSP metadata hosts rejected
+- CGNAT (`100.64/10`) treated as non-public for webhooks
+- Authorization header not forwarded across redirect hosts
+- Invalid VISION_* env no longer raises SystemExit at import
 
 ## [0.2.0] — 2026-08-13
 

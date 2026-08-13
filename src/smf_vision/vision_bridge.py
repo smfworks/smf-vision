@@ -70,11 +70,9 @@ DEFAULT_PROMPT = os.environ.get(
     "VISION_PROMPT",
     '/no_think\nOutput a JSON object {"caption":"...","objects":["..."],"has_person":true/false}. No markdown, no explanation.',
 )
-TIMEOUT = _env_int("VISION_TIMEOUT", 120)
-MAX_TOKENS = _env_int("VISION_MAX_TOKENS", 384)
-TEMPERATURE = _env_float("VISION_TEMPERATURE", 0.0)
-# Back-compat alias used by older callers/tests.
-ENDPOINT = os.environ.get("VISION_ENDPOINT", "http://localhost:8081/v1/chat/completions")
+TIMEOUT = 120
+MAX_TOKENS = 384
+TEMPERATURE = 0.0
 
 
 def _encode_image(path: str) -> str:
@@ -83,7 +81,7 @@ def _encode_image(path: str) -> str:
         return base64.b64encode(f.read()).decode()
 
 
-def _post(payload: dict[str, Any], retries: int = 2) -> dict[str, Any]:
+def _post(payload: dict[str, Any], retries: int = 2, timeout: int = TIMEOUT) -> dict[str, Any]:
     data = json.dumps(payload).encode()
     last_err: Exception | None = None
     for attempt in range(retries + 1):
@@ -95,7 +93,7 @@ def _post(payload: dict[str, Any], retries: int = 2) -> dict[str, Any]:
                 require_https=False,
                 data=data,
                 headers={"Content-Type": "application/json"},
-                timeout=TIMEOUT,
+                timeout=timeout,
             ) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
@@ -137,12 +135,15 @@ def describe_image(image_path: str, prompt: str = DEFAULT_PROMPT) -> dict[str, A
         caption (str), objects (list[str]), has_person (bool), raw (str), elapsed_ms (int)
     """
     t0 = time.time()
+    timeout = _env_int("VISION_TIMEOUT", TIMEOUT)
+    max_tokens_base = _env_int("VISION_MAX_TOKENS", MAX_TOKENS)
+    temperature = _env_float("VISION_TEMPERATURE", TEMPERATURE)
     b64 = _encode_image(image_path)
 
     # First attempt with default max_tokens. If the model burns the budget on
     # reasoning and returns empty content (common on dark/ambiguous frames with
     # Qwen3.5's reasoning mode), retry with a larger budget so it can finish.
-    for max_tokens in (MAX_TOKENS, MAX_TOKENS * 2, MAX_TOKENS * 4):
+    for max_tokens in (max_tokens_base, max_tokens_base * 2, max_tokens_base * 4):
         payload = {
             "model": MODEL,
             "messages": [
@@ -158,9 +159,9 @@ def describe_image(image_path: str, prompt: str = DEFAULT_PROMPT) -> dict[str, A
                 }
             ],
             "max_tokens": max_tokens,
-            "temperature": TEMPERATURE,
+            "temperature": temperature,
         }
-        resp = _post(payload)
+        resp = _post(payload, timeout=timeout)
         content = resp["choices"][0]["message"].get("content", "").strip()
         if content:
             break

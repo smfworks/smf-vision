@@ -25,10 +25,17 @@ METADATA_NETWORKS = (
 )
 LINK_LOCAL = ipaddress.ip_network("169.254.0.0/16")
 LINK_LOCAL_V6 = ipaddress.ip_network("fe80::/10")
+CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
 
 class UnsafeURLError(ValueError):
     """Raised when a URL is not allowed for the requested role."""
+
+
+def _canonical_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    return ip
 
 
 def _host_ips(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
@@ -54,10 +61,12 @@ def _host_ips(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
 
 
 def _is_metadata(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    ip = _canonical_ip(ip)
     return any(ip in net for net in METADATA_NETWORKS)
 
 
 def _is_private(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    ip = _canonical_ip(ip)
     return bool(
         ip.is_private
         or ip.is_loopback
@@ -66,6 +75,7 @@ def _is_private(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or ip.is_multicast
         or ip in LINK_LOCAL
         or ip in LINK_LOCAL_V6
+        or ip in CGNAT
     )
 
 
@@ -99,12 +109,31 @@ def validate_http_url(
 
 
 def validate_camera_source(source: str) -> str:
-    """Validate a camera source. Numeric indices and local paths are left alone."""
-    if source.startswith(("http://", "https://")):
-        return validate_http_url(source, role="camera", allow_private=True, require_https=False)
-    if "://" in source and not source.startswith("rtsp://"):
-        raise UnsafeURLError(f"unsupported camera source scheme: {source.split('://', 1)[0]}")
-    return source
+    """Validate a camera source. Numeric indices and local filesystem paths are left alone."""
+    if not isinstance(source, str) or not source.strip():
+        raise UnsafeURLError("camera source is required")
+    raw = source.strip()
+    lowered = raw.lower()
+    if lowered.startswith("file:") or raw.startswith("//"):
+        raise UnsafeURLError(f"unsupported camera source scheme: {raw.split(':', 1)[0] or 'protocol-relative'}")
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+    if scheme in {"http", "https"}:
+        if not parsed.netloc or not parsed.hostname:
+            raise UnsafeURLError("camera URL is missing a hostname")
+        return validate_http_url(raw, role="camera", allow_private=True, require_https=False)
+    if scheme == "rtsp":
+        if not parsed.hostname:
+            raise UnsafeURLError("rtsp URL is missing a hostname")
+        if parsed.hostname.lower() in METADATA_HOSTS:
+            raise UnsafeURLError("rtsp URL points at a metadata host")
+        for ip in _host_ips(parsed.hostname):
+            if _is_metadata(ip):
+                raise UnsafeURLError(f"rtsp URL resolves to a metadata address: {ip}")
+        return raw
+    if scheme:
+        raise UnsafeURLError(f"unsupported camera source scheme: {scheme}")
+    return raw
 
 
 def validate_webhook_url(url: str, *, allow_insecure: bool = False, allow_private: bool = False) -> str:
@@ -132,7 +161,14 @@ class ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
             allow_private=self._allow_private,
             require_https=self._require_https,
         )
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        old_host = urlparse(req.full_url).hostname
+        new_host = urlparse(newurl).hostname
+        if old_host and new_host and old_host.lower() != new_host.lower():
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 def open_http(
