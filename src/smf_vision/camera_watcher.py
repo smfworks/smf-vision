@@ -24,7 +24,6 @@ import logging
 import os
 import sys
 import time
-import urllib.request
 from typing import Any, Callable
 
 import cv2
@@ -32,7 +31,7 @@ import numpy as np
 
 from smf_vision import __version__
 from smf_vision.path_safety import resolve_writable_path
-from smf_vision.url_safety import UnsafeURLError, validate_camera_source, validate_webhook_url
+from smf_vision.url_safety import UnsafeURLError, open_http, validate_camera_source, validate_webhook_url
 from smf_vision.vision_bridge import describe_image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -56,13 +55,19 @@ def _open_source(source: str) -> cv2.VideoCapture:
 
 def _fetch_http_frame(source: str, username: str | None, password: str | None) -> np.ndarray | None:
     """Fetch a single JPEG snapshot from an HTTP(S) URL."""
-    safe = validate_camera_source(source)
-    req = urllib.request.Request(safe)
+    headers: dict[str, str] = {}
     if username and password:
         credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
-        req.add_header("Authorization", f"Basic {credentials}")
+        headers["Authorization"] = f"Basic {credentials}"
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with open_http(
+            source,
+            role="camera",
+            allow_private=True,
+            require_https=False,
+            headers=headers,
+            timeout=30,
+        ) as r:
             data = r.read()
         arr = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -104,8 +109,15 @@ def _build_dispatch(
         def _send(event: dict[str, Any]) -> None:
             try:
                 data = json.dumps(event).encode()
-                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=30) as r:
+                with open_http(
+                    url,
+                    role="webhook",
+                    allow_private=allow_private_webhook,
+                    require_https=not allow_insecure_webhook,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                ) as r:
                     logger.info("webhook %s HTTP %s", url, r.status)
             except Exception as e:
                 logger.warning("webhook dispatch failed: %s", e)

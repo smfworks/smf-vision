@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from smf_vision.path_safety import UnsafePathError, resolve_readable_image, resolve_writable_path
-from smf_vision.url_safety import UnsafeURLError, validate_camera_source, validate_webhook_url
+from smf_vision.url_safety import (
+    UnsafeURLError,
+    ValidatingRedirectHandler,
+    validate_camera_source,
+    validate_webhook_url,
+)
 
 
 def test_camera_http_private_allowed():
@@ -73,6 +78,19 @@ def test_readable_image_size_cap(tmp_path):
     p.write_bytes(b"x" * 100)
     with pytest.raises(UnsafePathError, match="exceeds"):
         resolve_readable_image(p, max_bytes=10)
+
+
+def test_redirect_to_metadata_is_rejected():
+    handler = ValidatingRedirectHandler(role="webhook", allow_private=False, require_https=False)
+    with pytest.raises(UnsafeURLError, match="metadata"):
+        handler.redirect_request(
+            None,
+            None,
+            302,
+            "Found",
+            {},
+            "http://169.254.169.254/latest/meta-data",
+        )
 
 
 def test_start_server_defaults_to_localhost():

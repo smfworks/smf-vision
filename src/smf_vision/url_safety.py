@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import urllib.request
 from urllib.parse import urlparse
 
 METADATA_HOSTS = frozenset(
@@ -113,3 +114,45 @@ def validate_webhook_url(url: str, *, allow_insecure: bool = False, allow_privat
         allow_private=allow_private,
         require_https=not allow_insecure,
     )
+
+
+class ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-validate every redirect hop against the same URL policy."""
+
+    def __init__(self, *, role: str, allow_private: bool, require_https: bool) -> None:
+        super().__init__()
+        self._role = role
+        self._allow_private = allow_private
+        self._require_https = require_https
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        validate_http_url(
+            newurl,
+            role=self._role,
+            allow_private=self._allow_private,
+            require_https=self._require_https,
+        )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def open_http(
+    url: str,
+    *,
+    role: str,
+    allow_private: bool,
+    require_https: bool,
+    data: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 30,
+):
+    safe = validate_http_url(
+        url,
+        role=role,
+        allow_private=allow_private,
+        require_https=require_https,
+    )
+    opener = urllib.request.build_opener(
+        ValidatingRedirectHandler(role=role, allow_private=allow_private, require_https=require_https)
+    )
+    req = urllib.request.Request(safe, data=data, headers=headers or {})
+    return opener.open(req, timeout=timeout)

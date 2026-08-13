@@ -31,7 +31,7 @@ from typing import Any
 
 from smf_vision import __version__
 from smf_vision.path_safety import resolve_readable_image
-from smf_vision.url_safety import validate_http_url
+from smf_vision.url_safety import open_http, validate_http_url
 
 
 def _env_int(name: str, default: int) -> int:
@@ -87,13 +87,16 @@ def _post(payload: dict[str, Any], retries: int = 2) -> dict[str, Any]:
     data = json.dumps(payload).encode()
     last_err: Exception | None = None
     for attempt in range(retries + 1):
-        req = urllib.request.Request(
-            _endpoint(),
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            with open_http(
+                _endpoint(),
+                role="vision endpoint",
+                allow_private=True,
+                require_https=False,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                timeout=TIMEOUT,
+            ) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
