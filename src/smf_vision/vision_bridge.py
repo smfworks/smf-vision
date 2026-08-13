@@ -29,19 +29,57 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-ENDPOINT = os.environ.get("VISION_ENDPOINT", "http://localhost:8081/v1/chat/completions")
+from smf_vision import __version__
+from smf_vision.path_safety import resolve_readable_image
+from smf_vision.url_safety import validate_http_url
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"invalid {name}={raw!r}; expected integer") from exc
+    if value <= 0:
+        raise SystemExit(f"invalid {name}={raw!r}; expected positive integer")
+    return value
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise SystemExit(f"invalid {name}={raw!r}; expected number") from exc
+    if value != value or value < 0:  # NaN or negative
+        raise SystemExit(f"invalid {name}={raw!r}")
+    return value
+
+
+def _endpoint() -> str:
+    return validate_http_url(
+        os.environ.get("VISION_ENDPOINT", "http://localhost:8081/v1/chat/completions"),
+        role="vision endpoint",
+        allow_private=True,
+        require_https=False,
+    )
+
+
 MODEL = os.environ.get("VISION_MODEL", "Qwen3.5-0.8B-UD-Q4_K_XL")
 DEFAULT_PROMPT = os.environ.get(
     "VISION_PROMPT",
     '/no_think\nOutput a JSON object {"caption":"...","objects":["..."],"has_person":true/false}. No markdown, no explanation.',
 )
-TIMEOUT = int(os.environ.get("VISION_TIMEOUT", "120"))
-MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "384"))
-TEMPERATURE = float(os.environ.get("VISION_TEMPERATURE", "0.0"))
+TIMEOUT = _env_int("VISION_TIMEOUT", 120)
+MAX_TOKENS = _env_int("VISION_MAX_TOKENS", 384)
+TEMPERATURE = _env_float("VISION_TEMPERATURE", 0.0)
+# Back-compat alias used by older callers/tests.
+ENDPOINT = os.environ.get("VISION_ENDPOINT", "http://localhost:8081/v1/chat/completions")
 
 
 def _encode_image(path: str) -> str:
-    with open(path, "rb") as f:
+    safe = resolve_readable_image(path)
+    with open(safe, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
 
@@ -50,7 +88,7 @@ def _post(payload: dict[str, Any], retries: int = 2) -> dict[str, Any]:
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(
-            ENDPOINT,
+            _endpoint(),
             data=data,
             headers={"Content-Type": "application/json"},
         )
@@ -156,6 +194,7 @@ def main() -> None:
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, help="custom prompt")
     ap.add_argument("--format", choices=["text", "json"], default="json", help="output format")
     ap.add_argument("--selftest", action="store_true", help="use a generated test image")
+    ap.add_argument("--version", action="version", version=f"smf-vision {__version__}")
     args = ap.parse_args()
 
     if args.selftest:

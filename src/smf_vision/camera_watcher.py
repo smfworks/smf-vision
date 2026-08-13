@@ -30,8 +30,10 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from vision_bridge import describe_image  # noqa: E402
+from smf_vision import __version__
+from smf_vision.path_safety import resolve_writable_path
+from smf_vision.url_safety import UnsafeURLError, validate_camera_source, validate_webhook_url
+from smf_vision.vision_bridge import describe_image
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("camera_watcher")
@@ -54,7 +56,8 @@ def _open_source(source: str) -> cv2.VideoCapture:
 
 def _fetch_http_frame(source: str, username: str | None, password: str | None) -> np.ndarray | None:
     """Fetch a single JPEG snapshot from an HTTP(S) URL."""
-    req = urllib.request.Request(source)
+    safe = validate_camera_source(source)
+    req = urllib.request.Request(safe)
     if username and password:
         credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
         req.add_header("Authorization", f"Basic {credentials}")
@@ -85,9 +88,18 @@ def _detect_motion(frame: np.ndarray, prev: np.ndarray | None, threshold: int, m
     return (motion_area / total_area) > min_area, gray
 
 
-def _build_dispatch(dispatch: str) -> Callable[[dict[str, Any]], None]:
+def _build_dispatch(
+    dispatch: str,
+    *,
+    allow_insecure_webhook: bool = False,
+    allow_private_webhook: bool = False,
+) -> Callable[[dict[str, Any]], None]:
     if dispatch.startswith("webhook:"):
-        url = dispatch.split(":", 1)[1]
+        url = validate_webhook_url(
+            dispatch.split(":", 1)[1],
+            allow_insecure=allow_insecure_webhook,
+            allow_private=allow_private_webhook,
+        )
 
         def _send(event: dict[str, Any]) -> None:
             try:
@@ -100,10 +112,11 @@ def _build_dispatch(dispatch: str) -> Callable[[dict[str, Any]], None]:
 
         return _send
     if dispatch.startswith("file:"):
-        path = dispatch.split(":", 1)[1]
+        path = resolve_writable_path(dispatch.split(":", 1)[1])
 
         def _append(event: dict[str, Any]) -> None:
-            with open(path, "a") as f:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
 
         return _append
@@ -129,9 +142,16 @@ def watch(
     max_dim: int = 1280,
     username: str | None = None,
     password: str | None = None,
+    allow_insecure_webhook: bool = False,
+    allow_private_webhook: bool = False,
 ) -> None:
     """Main loop: grab frames, filter by motion, caption selected frames, dispatch events."""
-    dispatcher = _build_dispatch(dispatch)
+    source = validate_camera_source(source)
+    dispatcher = _build_dispatch(
+        dispatch,
+        allow_insecure_webhook=allow_insecure_webhook,
+        allow_private_webhook=allow_private_webhook,
+    )
     is_http = source.startswith("http://") or source.startswith("https://")
 
     cap: cv2.VideoCapture | None = None
@@ -142,6 +162,8 @@ def watch(
     last_caption_time = 0.0
     frame_counter = 0
     event_counter = 0
+    if save_dir:
+        save_dir = str(resolve_writable_path(save_dir))
 
     try:
         while True:
@@ -199,6 +221,7 @@ def watch(
                 "has_person": bool(result.get("has_person")),
                 "inference_ms": result.get("elapsed_ms", 0),
                 "model": result.get("model", ""),
+                "smf_vision_version": __version__,
             }
             dispatcher(event)
     except KeyboardInterrupt:
@@ -215,22 +238,35 @@ def main() -> None:
     ap.add_argument("--motion-only", action="store_true", default=True, help="only caption when motion detected")
     ap.add_argument("--no-motion-only", dest="motion_only", action="store_false", help="caption on interval regardless of motion")
     ap.add_argument("--dispatch", default="print", help="print | file:path | webhook:url")
-    ap.add_argument("--save-dir", help="directory to keep analyzed frames")
+    ap.add_argument("--save-dir", help="directory to keep analyzed frames (must be under SMF_VISION_DATA_DIR or cwd)")
     ap.add_argument("--max-dim", type=int, default=1280, help="resize largest dimension before inference")
     ap.add_argument("--username", help="HTTP basic auth username")
-    ap.add_argument("--password", help="HTTP basic auth password")
+    ap.add_argument(
+        "--password",
+        default=os.environ.get("CAMERA_HTTP_PASSWORD"),
+        help="HTTP basic auth password (prefer CAMERA_HTTP_PASSWORD env)",
+    )
+    ap.add_argument("--allow-insecure-webhook", action="store_true", help="allow http:// webhooks")
+    ap.add_argument("--allow-private-webhook", action="store_true", help="allow RFC1918/loopback webhook targets")
+    ap.add_argument("--version", action="version", version=f"smf-vision {__version__}")
     args = ap.parse_args()
 
-    watch(
-        source=args.source,
-        interval=args.interval,
-        dispatch=args.dispatch,
-        motion_only=args.motion_only,
-        save_dir=args.save_dir,
-        max_dim=args.max_dim,
-        username=args.username,
-        password=args.password,
-    )
+    try:
+        watch(
+            source=args.source,
+            interval=args.interval,
+            dispatch=args.dispatch,
+            motion_only=args.motion_only,
+            save_dir=args.save_dir,
+            max_dim=args.max_dim,
+            username=args.username,
+            password=args.password,
+            allow_insecure_webhook=args.allow_insecure_webhook,
+            allow_private_webhook=args.allow_private_webhook,
+        )
+    except (UnsafeURLError, ValueError) as exc:
+        logger.error("%s", exc)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

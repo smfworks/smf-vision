@@ -1,5 +1,6 @@
 """Tests for camera_watcher dispatch routing and motion detection."""
 import numpy as np
+import pytest
 
 from smf_vision.camera_watcher import _build_dispatch, _detect_motion
 
@@ -11,7 +12,8 @@ def test_dispatch_print(capsys):
     assert '"event_id": 1' in captured.out
 
 
-def test_dispatch_file(tmp_path):
+def test_dispatch_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("SMF_VISION_DATA_DIR", str(tmp_path))
     log = tmp_path / "events.jsonl"
     dispatcher = _build_dispatch(f"file:{log}")
     dispatcher({"event_id": 1, "caption": "first"})
@@ -23,8 +25,18 @@ def test_dispatch_file(tmp_path):
 
 
 def test_dispatch_webhook_invalid_url():
-    # Should not raise, just log a warning on failure
-    dispatcher = _build_dispatch("webhook:http://127.0.0.1:1/events")
+    from smf_vision.url_safety import UnsafeURLError
+
+    with pytest.raises(UnsafeURLError):
+        _build_dispatch("webhook:http://127.0.0.1:1/events")
+
+
+def test_dispatch_webhook_opt_in_private():
+    dispatcher = _build_dispatch(
+        "webhook:http://127.0.0.1:1/events",
+        allow_insecure_webhook=True,
+        allow_private_webhook=True,
+    )
     dispatcher({"event_id": 1})  # no crash
 
 

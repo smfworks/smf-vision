@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smf-vision"
-version = "0.1.0"
+version = "0.2.0"
 description = "Remote camera frame ingestion + local VLM analysis pipeline"
 readme = "README.md"
 license = {text = "MIT"}
@@ -49,4 +49,5 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+pythonpath = ["src"]
+addopts = "-q"
