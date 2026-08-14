@@ -29,33 +29,72 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-ENDPOINT = os.environ.get("VISION_ENDPOINT", "http://localhost:8081/v1/chat/completions")
+from smf_vision import __version__
+from smf_vision.path_safety import resolve_readable_image
+from smf_vision.url_safety import open_http, validate_http_url
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"invalid {name}={raw!r}; expected integer") from exc
+    if value <= 0:
+        raise SystemExit(f"invalid {name}={raw!r}; expected positive integer")
+    return value
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise SystemExit(f"invalid {name}={raw!r}; expected number") from exc
+    if value != value or value < 0:  # NaN or negative
+        raise SystemExit(f"invalid {name}={raw!r}")
+    return value
+
+
+def _endpoint() -> str:
+    return validate_http_url(
+        os.environ.get("VISION_ENDPOINT", "http://localhost:8081/v1/chat/completions"),
+        role="vision endpoint",
+        allow_private=True,
+        require_https=False,
+    )
+
+
 MODEL = os.environ.get("VISION_MODEL", "Qwen3.5-0.8B-UD-Q4_K_XL")
 DEFAULT_PROMPT = os.environ.get(
     "VISION_PROMPT",
     '/no_think\nOutput a JSON object {"caption":"...","objects":["..."],"has_person":true/false}. No markdown, no explanation.',
 )
-TIMEOUT = int(os.environ.get("VISION_TIMEOUT", "120"))
-MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "384"))
-TEMPERATURE = float(os.environ.get("VISION_TEMPERATURE", "0.0"))
+TIMEOUT = 120
+MAX_TOKENS = 384
+TEMPERATURE = 0.0
 
 
 def _encode_image(path: str) -> str:
-    with open(path, "rb") as f:
+    safe = resolve_readable_image(path)
+    with open(safe, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
 
-def _post(payload: dict[str, Any], retries: int = 2) -> dict[str, Any]:
+def _post(payload: dict[str, Any], retries: int = 2, timeout: int = TIMEOUT) -> dict[str, Any]:
     data = json.dumps(payload).encode()
     last_err: Exception | None = None
     for attempt in range(retries + 1):
-        req = urllib.request.Request(
-            ENDPOINT,
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            with open_http(
+                _endpoint(),
+                role="vision endpoint",
+                allow_private=True,
+                require_https=False,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                timeout=timeout,
+            ) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
@@ -96,12 +135,15 @@ def describe_image(image_path: str, prompt: str = DEFAULT_PROMPT) -> dict[str, A
         caption (str), objects (list[str]), has_person (bool), raw (str), elapsed_ms (int)
     """
     t0 = time.time()
+    timeout = _env_int("VISION_TIMEOUT", TIMEOUT)
+    max_tokens_base = _env_int("VISION_MAX_TOKENS", MAX_TOKENS)
+    temperature = _env_float("VISION_TEMPERATURE", TEMPERATURE)
     b64 = _encode_image(image_path)
 
     # First attempt with default max_tokens. If the model burns the budget on
     # reasoning and returns empty content (common on dark/ambiguous frames with
     # Qwen3.5's reasoning mode), retry with a larger budget so it can finish.
-    for max_tokens in (MAX_TOKENS, MAX_TOKENS * 2, MAX_TOKENS * 4):
+    for max_tokens in (max_tokens_base, max_tokens_base * 2, max_tokens_base * 4):
         payload = {
             "model": MODEL,
             "messages": [
@@ -117,9 +159,9 @@ def describe_image(image_path: str, prompt: str = DEFAULT_PROMPT) -> dict[str, A
                 }
             ],
             "max_tokens": max_tokens,
-            "temperature": TEMPERATURE,
+            "temperature": temperature,
         }
-        resp = _post(payload)
+        resp = _post(payload, timeout=timeout)
         content = resp["choices"][0]["message"].get("content", "").strip()
         if content:
             break
@@ -156,6 +198,7 @@ def main() -> None:
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, help="custom prompt")
     ap.add_argument("--format", choices=["text", "json"], default="json", help="output format")
     ap.add_argument("--selftest", action="store_true", help="use a generated test image")
+    ap.add_argument("--version", action="version", version=f"smf-vision {__version__}")
     args = ap.parse_args()
 
     if args.selftest:

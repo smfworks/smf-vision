@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-13
+
+### Fixed
+- HTTP camera, webhook, and VLM posts now re-validate every redirect hop (metadata/private SSRF)
+- IPv4-mapped IMDS (`::ffff:169.254.169.254`) rejected even when private cameras are allowed
+- `file:`, protocol-relative, and `http:/` camera sources rejected
+- RTSP metadata hosts rejected
+- CGNAT (`100.64/10`) treated as non-public for webhooks
+- Authorization header not forwarded across redirect hosts
+- Invalid VISION_* env no longer raises SystemExit at import
+
+## [0.2.0] — 2026-08-13
+
+### Added
+- `url_safety` and `path_safety` modules with tests
+- GitHub Actions CI (pytest + ruff on Python 3.10 and 3.12)
+- SECURITY.md, ARCHITECTURE.md, CONTRIBUTING.md
+- `--version` on both CLIs; `smf_vision_version` on watcher events
+- `SMF_VISION_DATA_DIR` root for `file:` dispatch and `--save-dir`
+- `--allow-insecure-webhook` / `--allow-private-webhook`
+- `CAMERA_HTTP_PASSWORD` env as the preferred camera password source
+- llama-server binds `127.0.0.1` by default; `--listen-all` for 0.0.0.0
+
+### Fixed
+- Tests now collect on a clean clone (`pythonpath = ["src"]`)
+- Package import no longer depends on a `sys.path` hack
+- `start_server.sh` pointed at a nonexistent `download_models.sh`
+- Unsafe env values for timeout / token / temperature now fail closed
+
+### Security
+- Reject `file://`, metadata IPs/hostnames, and non-http(s) camera network schemes
+- Webhooks require public HTTPS unless explicitly opted in
+- Writable paths cannot escape the data root
+
 ## [Unreleased]
 
 ### Added

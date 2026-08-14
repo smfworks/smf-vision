@@ -6,6 +6,8 @@ Reads frames from RTSP/HTTP/local cameras, filters by motion detection, captions
 selected frames with a local vision-language model (Qwen3.5-0.8B via llama.cpp),
 and dispatches structured JSON events to stdout, file, or webhook.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md).
+
 ## Quick start
 
 ### 1. Install
@@ -41,7 +43,7 @@ python scripts/download_models.py
 ### 4. Start the vision server
 
 ```bash
-./scripts/start_server.sh          # auto-detect GPU/CPU
+./scripts/start_server.sh          # auto-detect GPU/CPU, bind 127.0.0.1
 ./scripts/start_server.sh --cpu    # force CPU
 ./scripts/start_server.sh --gpu    # force ROCm GPU
 ```
@@ -59,16 +61,17 @@ smf-vision-caption --image photo.jpg
 # Local webcam
 smf-vision-watch --source 0 --interval 5 --dispatch print
 
-# HTTP snapshot camera
-smf-vision-watch --source http://camera.local/snapshot.jpg \
-  --interval 10 --username admin --password secret \
-  --dispatch webhook:https://api.example.com/events
+# HTTP snapshot camera (password via env, not argv)
+CAMERA_HTTP_PASSWORD=secret smf-vision-watch \
+  --source http://192.168.1.50/snapshot.jpg \
+  --interval 10 --username admin \
+  --dispatch file:events.jsonl
 
-# RTSP stream with motion filter
+# HTTPS webhook (public HTTPS only unless you opt in)
 smf-vision-watch --source rtsp://192.168.1.50/stream \
   --interval 3 --motion-only \
-  --save-dir /tmp/camera_frames \
-  --dispatch file:/tmp/camera_events.jsonl
+  --save-dir frames \
+  --dispatch webhook:https://example.com/events
 ```
 
 ## Event schema
@@ -100,6 +103,8 @@ Environment variables:
 | `VISION_TEMPERATURE` | `0.0` | Sampling temperature |
 | `CAMERA_MOTION_THRESHOLD` | `25` | Pixel diff threshold for motion |
 | `CAMERA_MOTION_AREA` | `0.02` | Min fraction of frame area with motion |
+| `SMF_VISION_DATA_DIR` | cwd | Root for `file:` dispatch and `--save-dir` |
+| `CAMERA_HTTP_PASSWORD` | unset | HTTP basic auth password (preferred over `--password`) |
 
 ## Tested hardware
 
